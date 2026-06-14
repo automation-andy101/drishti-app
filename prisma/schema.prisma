@@ -1,0 +1,118 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+}
+
+model Profile {
+  id        String   @id @default(uuid())
+  userId    String   @unique @map("user_id")
+  name      String?
+  avatarUrl String?  @map("avatar_url")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  sequences Sequence[]
+
+  @@map("profiles")
+}
+
+model Pose {
+  id               String     @id @default(uuid())
+  name             String
+  sanskritName     String?    @map("sanskrit_name")
+  description      String?
+  difficulty       Difficulty @default(BEGINNER)
+  bodyArea         BodyArea[] @map("body_area")
+  styles           Style[]
+  contraindications String?
+  breathCount      Int?       @default(5) @map("breath_count")
+  imageUrl         String?    @map("image_url")
+  createdAt        DateTime   @default(now()) @map("created_at")
+
+  sequencePoses SequencePose[]
+
+  @@map("poses")
+}
+
+model Sequence {
+  id          String   @id @default(uuid())
+  title       String
+  description String?
+  style       Style
+  lengthMins  Int      @map("length_mins")
+  level       Level    @default(ALL_LEVELS)
+  focusArea   BodyArea? @map("focus_area")
+  peakPose    String?  @map("peak_pose")
+  isPublic    Boolean  @default(false) @map("is_public")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  profileId String  @map("profile_id")
+  profile   Profile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  sequencePoses SequencePose[]
+
+  @@map("sequences")
+}
+
+model SequencePose {
+  id         String  @id @default(uuid())
+  order      Int
+  notes      String?
+  breathCount Int?   @default(5) @map("breath_count")
+  side       Side?
+
+  sequenceId String   @map("sequence_id")
+  sequence   Sequence @relation(fields: [sequenceId], references: [id], onDelete: Cascade)
+
+  poseId String @map("pose_id")
+  pose   Pose   @relation(fields: [poseId], references: [id])
+
+  @@unique([sequenceId, order])
+  @@map("sequence_poses")
+}
+
+enum Difficulty {
+  BEGINNER
+  INTERMEDIATE
+  ADVANCED
+}
+
+enum Style {
+  VINYASA
+  HATHA
+  ASHTANGA
+  YIN
+  RESTORATIVE
+  POWER
+  KUNDALINI
+}
+
+enum Level {
+  BEGINNER
+  INTERMEDIATE
+  ADVANCED
+  ALL_LEVELS
+}
+
+enum BodyArea {
+  HIPS
+  HAMSTRINGS
+  BACKBENDS
+  CORE
+  SHOULDERS
+  INVERSIONS
+  TWISTS
+  BALANCE
+  CHEST
+  FORWARD_FOLDS
+}
+
+enum Side {
+  LEFT
+  RIGHT
+  BOTH
+}
