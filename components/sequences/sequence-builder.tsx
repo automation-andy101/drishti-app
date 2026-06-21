@@ -4,7 +4,7 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
-import { Trash2, GripVertical, Plus, Play } from 'lucide-react'
+import { Trash2, GripVertical, Plus, Play, MessageSquare, ChevronDown, ChevronUp, X } from 'lucide-react'
 
 type Pose = {
   id: string
@@ -15,6 +15,23 @@ type Pose = {
   styles: string[]
 }
 
+type Cue = {
+  id: string
+  pose_id: string
+  text: string
+  is_default: boolean
+  created_by: string | null
+}
+
+type SequencePoseCue = {
+  id: string
+  sequence_pose_id: string
+  cue_id: string | null
+  custom_text: string | null
+  order_num: number
+  cues: Cue | null
+}
+
 type SequencePose = {
   id: string
   order_num: number
@@ -22,6 +39,7 @@ type SequencePose = {
   breath_count: number | null
   section: string | null
   poses: Pose
+  sequence_pose_cues: SequencePoseCue[]
 }
 
 type Sequence = {
@@ -53,10 +71,12 @@ export default function SequenceBuilder({
   sequence,
   initialPoses,
   poseLibrary,
+  profileId,
 }: {
   sequence: Sequence
   initialPoses: SequencePose[]
   poseLibrary: Pose[]
+  profileId: string | null
 }) {
   const router = useRouter()
   const supabase = createClient()
@@ -65,6 +85,9 @@ export default function SequenceBuilder({
   const [activeSection, setActiveSection] = useState<string>(NO_SECTION)
   const [customSectionInput, setCustomSectionInput] = useState('')
   const [showAddSection, setShowAddSection] = useState(false)
+  const [openCuePicker, setOpenCuePicker] = useState<string | null>(null)
+  const [cueLibraries, setCueLibraries] = useState<Record<string, Cue[]>>({})
+  const [customCueDrafts, setCustomCueDrafts] = useState<Record<string, string>>({})
 
   const filteredPoses = poseLibrary.filter((p) =>
     p.name.toLowerCase().includes(search.toLowerCase()) ||
@@ -102,7 +125,7 @@ export default function SequenceBuilder({
         breath_count: 5,
         section: sectionToUse,
       })
-      .select('*, poses(*)')
+      .select('*, poses(*), sequence_pose_cues(*, cues(*))')
       .single()
 
     if (error) {
@@ -152,6 +175,139 @@ export default function SequenceBuilder({
 
   function formatLabel(str: string) {
     return str.replace('_', ' ').charAt(0) + str.replace('_', ' ').slice(1).toLowerCase()
+  }
+
+  async function loadCuesForPose(poseId: string) {
+    if (cueLibraries[poseId]) return
+
+    const { data, error } = await supabase
+      .from('cues')
+      .select('*')
+      .eq('pose_id', poseId)
+      .order('is_default', { ascending: false })
+
+    if (error) {
+      console.error('Error loading cues:', error)
+      return
+    }
+
+    setCueLibraries((prev) => ({ ...prev, [poseId]: data || [] }))
+  }
+
+  function toggleCuePicker(sequencePoseId: string, poseId: string) {
+    if (openCuePicker === sequencePoseId) {
+      setOpenCuePicker(null)
+    } else {
+      setOpenCuePicker(sequencePoseId)
+      loadCuesForPose(poseId)
+    }
+  }
+
+  // Add a cue from the library to the stack for this pose instance
+  async function addLibraryCueToStack(sp: SequencePose, cue: Cue) {
+    const alreadyAdded = sp.sequence_pose_cues.some((spc) => spc.cue_id === cue.id)
+    if (alreadyAdded) return
+
+    const nextOrder = sp.sequence_pose_cues.length
+
+    const { data, error } = await supabase
+      .from('sequence_pose_cues')
+      .insert({
+        sequence_pose_id: sp.id,
+        cue_id: cue.id,
+        order_num: nextOrder,
+      })
+      .select('*, cues(*)')
+      .single()
+
+    if (error) {
+      console.error('Error adding cue to stack:', error)
+      return
+    }
+
+    setSequencePoses((prev) =>
+      prev.map((s) =>
+        s.id === sp.id
+          ? { ...s, sequence_pose_cues: [...s.sequence_pose_cues, data] }
+          : s
+      )
+    )
+  }
+
+  // Add a freshly written custom cue to the stack, and save it to the user's personal library too
+  async function addCustomCueToStack(sp: SequencePose) {
+    const text = customCueDrafts[sp.id]?.trim()
+    if (!text) return
+
+    const nextOrder = sp.sequence_pose_cues.length
+
+    // Save to personal cue library for reuse
+    let savedCue: Cue | null = null
+    if (profileId) {
+      const { data: newCue } = await supabase
+        .from('cues')
+        .insert({
+          pose_id: sp.poses.id,
+          text,
+          is_default: false,
+          created_by: profileId,
+        })
+        .select()
+        .single()
+
+      if (newCue) {
+        savedCue = newCue
+        setCueLibraries((prev) => ({
+          ...prev,
+          [sp.poses.id]: [...(prev[sp.poses.id] || []), newCue],
+        }))
+      }
+    }
+
+    const { data, error } = await supabase
+      .from('sequence_pose_cues')
+      .insert({
+        sequence_pose_id: sp.id,
+        cue_id: savedCue?.id || null,
+        custom_text: savedCue ? null : text,
+        order_num: nextOrder,
+      })
+      .select('*, cues(*)')
+      .single()
+
+    if (error) {
+      console.error('Error adding custom cue to stack:', error)
+      return
+    }
+
+    setSequencePoses((prev) =>
+      prev.map((s) =>
+        s.id === sp.id
+          ? { ...s, sequence_pose_cues: [...s.sequence_pose_cues, data] }
+          : s
+      )
+    )
+    setCustomCueDrafts((prev) => ({ ...prev, [sp.id]: '' }))
+  }
+
+  async function removeCueFromStack(sequencePoseId: string, sequencePoseCueId: string) {
+    const { error } = await supabase
+      .from('sequence_pose_cues')
+      .delete()
+      .eq('id', sequencePoseCueId)
+
+    if (error) {
+      console.error('Error removing cue:', error)
+      return
+    }
+
+    setSequencePoses((prev) =>
+      prev.map((sp) =>
+        sp.id === sequencePoseId
+          ? { ...sp, sequence_pose_cues: sp.sequence_pose_cues.filter((spc) => spc.id !== sequencePoseCueId) }
+          : sp
+      )
+    )
   }
 
   return (
@@ -216,43 +372,137 @@ export default function SequenceBuilder({
                       {posesInSection.map((sp) => {
                         const primaryArea = sp.poses.body_area?.[0] || 'BALANCE'
                         const color = bodyAreaColors[primaryArea] || 'bg-gray-100'
+                        const cuePickerOpen = openCuePicker === sp.id
+                        const stackedCues = [...(sp.sequence_pose_cues || [])].sort((a, b) => a.order_num - b.order_num)
+                        const availableCues = cueLibraries[sp.poses.id] || []
+                        const addedCueIds = new Set(stackedCues.map((spc) => spc.cue_id).filter(Boolean))
 
                         return (
                           <div
                             key={sp.id}
-                            className="flex items-center gap-3 border rounded-lg p-3 bg-background"
+                            className="border rounded-lg bg-background overflow-hidden"
                           >
-                            <GripVertical size={16} className="text-muted-foreground shrink-0" />
-                            <div className={`w-8 h-8 rounded-md ${color} shrink-0`} />
-                            <div className="flex-1 min-w-0">
-                              <div className="font-medium text-sm truncate">
-                                {sp.poses.name}
+                            <div className="flex items-center gap-3 p-3">
+                              <GripVertical size={16} className="text-muted-foreground shrink-0" />
+                              <div className={`w-8 h-8 rounded-md ${color} shrink-0`} />
+                              <div className="flex-1 min-w-0">
+                                <div className="font-medium text-sm truncate">
+                                  {sp.poses.name}
+                                </div>
+                                <div className="text-xs text-muted-foreground">
+                                  {sp.poses.sanskrit_name} · {sp.breath_count} breaths
+                                </div>
                               </div>
-                              <div className="text-xs text-muted-foreground">
-                                {sp.poses.sanskrit_name} · {sp.breath_count} breaths
-                              </div>
+
+                              <select
+                                value={sp.section || NO_SECTION}
+                                onChange={(e) => updateSection(sp.id, e.target.value)}
+                                className="text-xs border rounded-md px-1.5 py-1 bg-background text-muted-foreground shrink-0 max-w-[110px]"
+                              >
+                                <option value={NO_SECTION}>Unsorted</option>
+                                {allSectionOptions.map((s) => (
+                                  <option key={s} value={s}>{s}</option>
+                                ))}
+                              </select>
+
+                              <span className="text-xs text-muted-foreground shrink-0">
+                                #{sp.order_num}
+                              </span>
+                              <button
+                                onClick={() => removePose(sp.id)}
+                                className="text-muted-foreground hover:text-red-500 transition-colors shrink-0"
+                              >
+                                <Trash2 size={14} />
+                              </button>
                             </div>
 
-                            <select
-                              value={sp.section || NO_SECTION}
-                              onChange={(e) => updateSection(sp.id, e.target.value)}
-                              className="text-xs border rounded-md px-1.5 py-1 bg-background text-muted-foreground shrink-0 max-w-[110px]"
-                            >
-                              <option value={NO_SECTION}>Unsorted</option>
-                              {allSectionOptions.map((s) => (
-                                <option key={s} value={s}>{s}</option>
-                              ))}
-                            </select>
+                            <div className="border-t bg-secondary/40">
+                              <button
+                                onClick={() => toggleCuePicker(sp.id, sp.poses.id)}
+                                className="w-full flex items-center gap-2 px-3 py-2 text-xs text-left hover:bg-secondary/70 transition-colors"
+                              >
+                                <MessageSquare size={13} className="text-muted-foreground shrink-0" />
+                                {stackedCues.length > 0 ? (
+                                  <span className="flex-1 text-foreground">
+                                    {stackedCues.length} cue{stackedCues.length > 1 ? 's' : ''} added
+                                  </span>
+                                ) : (
+                                  <span className="flex-1 text-muted-foreground">Add teaching cues…</span>
+                                )}
+                                {cuePickerOpen ? (
+                                  <ChevronUp size={13} className="text-muted-foreground shrink-0" />
+                                ) : (
+                                  <ChevronDown size={13} className="text-muted-foreground shrink-0" />
+                                )}
+                              </button>
 
-                            <span className="text-xs text-muted-foreground shrink-0">
-                              #{sp.order_num}
-                            </span>
-                            <button
-                              onClick={() => removePose(sp.id)}
-                              className="text-muted-foreground hover:text-red-500 transition-colors shrink-0"
-                            >
-                              <Trash2 size={14} />
-                            </button>
+                              {/* Always-visible stacked cue list, even when picker is collapsed */}
+                              {stackedCues.length > 0 && (
+                                <div className="px-3 pb-2 flex flex-col gap-1">
+                                  {stackedCues.map((spc) => (
+                                    <div
+                                      key={spc.id}
+                                      className="flex items-start gap-2 text-xs bg-background border rounded-md px-2.5 py-1.5"
+                                    >
+                                      <span className="flex-1">
+                                        {spc.cues?.text || spc.custom_text}
+                                      </span>
+                                      <button
+                                        onClick={() => removeCueFromStack(sp.id, spc.id)}
+                                        className="text-muted-foreground hover:text-red-500 shrink-0"
+                                      >
+                                        <X size={12} />
+                                      </button>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+
+                              {cuePickerOpen && (
+                                <div className="px-3 pb-3 pt-1">
+                                  {availableCues.length > 0 && (
+                                    <div className="flex flex-col gap-1 mb-2">
+                                      {availableCues
+                                        .filter((cue) => !addedCueIds.has(cue.id))
+                                        .map((cue) => (
+                                          <button
+                                            key={cue.id}
+                                            onClick={() => addLibraryCueToStack(sp, cue)}
+                                            className="text-left text-xs px-2.5 py-1.5 rounded-md border bg-background hover:bg-secondary transition-colors flex items-center gap-1.5"
+                                          >
+                                            <Plus size={11} className="shrink-0 text-muted-foreground" />
+                                            <span>{cue.text}</span>
+                                            {!cue.is_default && (
+                                              <span className="opacity-60 shrink-0">· yours</span>
+                                            )}
+                                          </button>
+                                        ))}
+                                    </div>
+                                  )}
+
+                                  <div className="flex gap-1.5">
+                                    <input
+                                      type="text"
+                                      placeholder="Write your own cue…"
+                                      value={customCueDrafts[sp.id] || ''}
+                                      onChange={(e) =>
+                                        setCustomCueDrafts((prev) => ({ ...prev, [sp.id]: e.target.value }))
+                                      }
+                                      onKeyDown={(e) =>
+                                        e.key === 'Enter' && addCustomCueToStack(sp)
+                                      }
+                                      className="flex-1 text-xs px-2 py-1.5 border rounded-md bg-background"
+                                    />
+                                    <button
+                                      onClick={() => addCustomCueToStack(sp)}
+                                      className="text-xs px-3 py-1.5 bg-primary text-primary-foreground rounded-md shrink-0"
+                                    >
+                                      Add
+                                    </button>
+                                  </div>
+                                </div>
+                              )}
+                            </div>
                           </div>
                         )
                       })}
