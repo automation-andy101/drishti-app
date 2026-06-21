@@ -2,6 +2,8 @@ import { createClient } from '@/lib/supabase/server'
 import { notFound } from 'next/navigation'
 import SequenceBuilder from '@/components/sequences/sequence-builder'
 
+export const dynamic = 'force-dynamic'
+
 export default async function SequenceBuilderPage({
   params,
 }: {

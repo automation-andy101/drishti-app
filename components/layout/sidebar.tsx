@@ -9,14 +9,16 @@ import {
   ListMusic,
   BookOpen,
   Settings,
-  X,
   Menu,
+  X,
+  MessageSquareText,
 } from 'lucide-react'
 
 const links = [
   { href: '/', label: 'Dashboard', icon: LayoutDashboard },
   { href: '/sequences', label: 'Sequences', icon: ListMusic },
   { href: '/poses', label: 'Pose library', icon: BookOpen },
+  { href: '/cues', label: 'Cue search', icon: MessageSquareText },
   { href: '/settings', label: 'Settings', icon: Settings },
 ]
 

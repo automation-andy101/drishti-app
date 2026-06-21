@@ -4,7 +4,7 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
-import { Trash2, GripVertical, Plus, Play, MessageSquare, ChevronDown, ChevronUp, X } from 'lucide-react'
+import { Trash2, GripVertical, Plus, Play, MessageSquare, ChevronDown, ChevronUp, Pencil, Check, X } from 'lucide-react'
 
 type Pose = {
   id: string
@@ -87,16 +87,16 @@ export default function SequenceBuilder({
   const [showAddSection, setShowAddSection] = useState(false)
   const [openCuePicker, setOpenCuePicker] = useState<string | null>(null)
   const [cueLibraries, setCueLibraries] = useState<Record<string, Cue[]>>({})
-  const [customCueDrafts, setCustomCueDrafts] = useState<Record<string, string>>({})
+  const [newCueDrafts, setNewCueDrafts] = useState<Record<string, string>>({})
+  const [editingCueId, setEditingCueId] = useState<string | null>(null)
+  const [editDraft, setEditDraft] = useState('')
 
   const filteredPoses = poseLibrary.filter((p) =>
     p.name.toLowerCase().includes(search.toLowerCase()) ||
     p.sanskrit_name?.toLowerCase().includes(search.toLowerCase())
   )
 
-  const usedSections = Array.from(
-    new Set(sequencePoses.map((sp) => sp.section || NO_SECTION))
-  )
+  const usedSections = Array.from(new Set(sequencePoses.map((sp) => sp.section || NO_SECTION)))
 
   const orderedSections = [
     ...DEFAULT_SECTIONS.filter((s) => usedSections.includes(s)),
@@ -109,11 +109,8 @@ export default function SequenceBuilder({
   )
 
   async function addPose(pose: Pose) {
-    const maxOrder = sequencePoses.length > 0
-      ? Math.max(...sequencePoses.map((sp) => sp.order_num))
-      : 0
+    const maxOrder = sequencePoses.length > 0 ? Math.max(...sequencePoses.map((sp) => sp.order_num)) : 0
     const nextOrder = maxOrder + 1
-
     const sectionToUse = activeSection === NO_SECTION ? null : activeSection
 
     const { data, error } = await supabase
@@ -129,40 +126,26 @@ export default function SequenceBuilder({
       .single()
 
     if (error) {
-      console.error('Insert error:', JSON.stringify(error, null, 2))
+      console.error('Insert error:', error)
       return
     }
 
-    setSequencePoses((prev) => [...prev, data])
+    setSequencePoses((prev) => [...prev, { ...data, sequence_pose_cues: data.sequence_pose_cues || [] }])
   }
 
   async function removePose(sequencePoseId: string) {
-    await supabase
-      .from('sequence_poses')
-      .delete()
-      .eq('id', sequencePoseId)
-
+    await supabase.from('sequence_poses').delete().eq('id', sequencePoseId)
     setSequencePoses((prev) => prev.filter((sp) => sp.id !== sequencePoseId))
   }
 
   async function updateSection(sequencePoseId: string, newSection: string) {
     const sectionToSave = newSection === NO_SECTION ? null : newSection
-
-    const { error } = await supabase
-      .from('sequence_poses')
-      .update({ section: sectionToSave })
-      .eq('id', sequencePoseId)
-
+    const { error } = await supabase.from('sequence_poses').update({ section: sectionToSave }).eq('id', sequencePoseId)
     if (error) {
-      console.error('Update error:', JSON.stringify(error, null, 2))
+      console.error('Update error:', error)
       return
     }
-
-    setSequencePoses((prev) =>
-      prev.map((sp) =>
-        sp.id === sequencePoseId ? { ...sp, section: sectionToSave } : sp
-      )
-    )
+    setSequencePoses((prev) => prev.map((sp) => (sp.id === sequencePoseId ? { ...sp, section: sectionToSave } : sp)))
   }
 
   function addCustomSection() {
@@ -179,18 +162,15 @@ export default function SequenceBuilder({
 
   async function loadCuesForPose(poseId: string) {
     if (cueLibraries[poseId]) return
-
     const { data, error } = await supabase
       .from('cues')
       .select('*')
       .eq('pose_id', poseId)
       .order('is_default', { ascending: false })
-
     if (error) {
       console.error('Error loading cues:', error)
       return
     }
-
     setCueLibraries((prev) => ({ ...prev, [poseId]: data || [] }))
   }
 
@@ -203,67 +183,65 @@ export default function SequenceBuilder({
     }
   }
 
-  // Add a cue from the library to the stack for this pose instance
-  async function addLibraryCueToStack(sp: SequencePose, cue: Cue) {
-    const alreadyAdded = sp.sequence_pose_cues.some((spc) => spc.cue_id === cue.id)
-    if (alreadyAdded) return
+  // Toggle a library cue on/off for this pose instance — checkbox style, stable position
+  async function toggleLibraryCue(sp: SequencePose, cue: Cue) {
+    const existing = (sp.sequence_pose_cues || []).find((spc) => spc.cue_id === cue.id)
 
-    const nextOrder = sp.sequence_pose_cues.length
-
-    const { data, error } = await supabase
-      .from('sequence_pose_cues')
-      .insert({
-        sequence_pose_id: sp.id,
-        cue_id: cue.id,
-        order_num: nextOrder,
-      })
-      .select('*, cues(*)')
-      .single()
-
-    if (error) {
-      console.error('Error adding cue to stack:', error)
-      return
-    }
-
-    setSequencePoses((prev) =>
-      prev.map((s) =>
-        s.id === sp.id
-          ? { ...s, sequence_pose_cues: [...s.sequence_pose_cues, data] }
-          : s
+    if (existing) {
+      // Uncheck — remove the join row
+      const { error } = await supabase.from('sequence_pose_cues').delete().eq('id', existing.id)
+      if (error) {
+        console.error('Error removing cue:', error)
+        return
+      }
+      setSequencePoses((prev) =>
+        prev.map((s) =>
+          s.id === sp.id
+            ? { ...s, sequence_pose_cues: (s.sequence_pose_cues || []).filter((spc) => spc.id !== existing.id) }
+            : s
+        )
       )
-    )
+    } else {
+      // Check — add the join row
+      const nextOrder = (sp.sequence_pose_cues || []).length
+      const { data, error } = await supabase
+        .from('sequence_pose_cues')
+        .insert({ sequence_pose_id: sp.id, cue_id: cue.id, order_num: nextOrder })
+        .select('*, cues(*)')
+        .single()
+      if (error) {
+        console.error('Error adding cue:', error)
+        return
+      }
+      setSequencePoses((prev) =>
+        prev.map((s) =>
+          s.id === sp.id ? { ...s, sequence_pose_cues: [...(s.sequence_pose_cues || []), data] } : s
+        )
+      )
+    }
   }
 
-  // Add a freshly written custom cue to the stack, and save it to the user's personal library too
-  async function addCustomCueToStack(sp: SequencePose) {
-    const text = customCueDrafts[sp.id]?.trim()
+  // Write a brand new cue: saves to personal library AND attaches it to this pose instance immediately
+  async function addNewCue(sp: SequencePose) {
+    const text = newCueDrafts[sp.id]?.trim()
     if (!text) return
 
-    const nextOrder = sp.sequence_pose_cues.length
-
-    // Save to personal cue library for reuse
     let savedCue: Cue | null = null
     if (profileId) {
-      const { data: newCue } = await supabase
+      const { data: newCue, error: cueError } = await supabase
         .from('cues')
-        .insert({
-          pose_id: sp.poses.id,
-          text,
-          is_default: false,
-          created_by: profileId,
-        })
+        .insert({ pose_id: sp.poses.id, text, is_default: false, created_by: profileId })
         .select()
         .single()
-
-      if (newCue) {
-        savedCue = newCue
-        setCueLibraries((prev) => ({
-          ...prev,
-          [sp.poses.id]: [...(prev[sp.poses.id] || []), newCue],
-        }))
+      if (cueError) {
+        console.error('Error saving cue:', cueError)
+        return
       }
+      savedCue = newCue
+      setCueLibraries((prev) => ({ ...prev, [sp.poses.id]: [...(prev[sp.poses.id] || []), newCue] }))
     }
 
+    const nextOrder = (sp.sequence_pose_cues || []).length
     const { data, error } = await supabase
       .from('sequence_pose_cues')
       .insert({
@@ -276,37 +254,74 @@ export default function SequenceBuilder({
       .single()
 
     if (error) {
-      console.error('Error adding custom cue to stack:', error)
+      console.error('Error attaching new cue:', error)
       return
     }
 
     setSequencePoses((prev) =>
-      prev.map((s) =>
-        s.id === sp.id
-          ? { ...s, sequence_pose_cues: [...s.sequence_pose_cues, data] }
-          : s
-      )
+      prev.map((s) => (s.id === sp.id ? { ...s, sequence_pose_cues: [...(s.sequence_pose_cues || []), data] } : s))
     )
-    setCustomCueDrafts((prev) => ({ ...prev, [sp.id]: '' }))
+    setNewCueDrafts((prev) => ({ ...prev, [sp.id]: '' }))
   }
 
-  async function removeCueFromStack(sequencePoseId: string, sequencePoseCueId: string) {
-    const { error } = await supabase
-      .from('sequence_pose_cues')
-      .delete()
-      .eq('id', sequencePoseCueId)
+  function startEditingCue(cue: Cue) {
+    setEditingCueId(cue.id)
+    setEditDraft(cue.text)
+  }
 
+  async function saveEditedCue(poseId: string) {
+    if (!editingCueId) return
+    const trimmed = editDraft.trim()
+    if (!trimmed) return
+
+    const { error } = await supabase.from('cues').update({ text: trimmed }).eq('id', editingCueId)
     if (error) {
-      console.error('Error removing cue:', error)
+      console.error('Error editing cue:', error)
       return
     }
 
+    setCueLibraries((prev) => ({
+      ...prev,
+      [poseId]: (prev[poseId] || []).map((c) => (c.id === editingCueId ? { ...c, text: trimmed } : c)),
+    }))
+
     setSequencePoses((prev) =>
-      prev.map((sp) =>
-        sp.id === sequencePoseId
-          ? { ...sp, sequence_pose_cues: sp.sequence_pose_cues.filter((spc) => spc.id !== sequencePoseCueId) }
-          : sp
-      )
+      prev.map((sp) => ({
+        ...sp,
+        sequence_pose_cues: (sp.sequence_pose_cues || []).map((spc) =>
+          spc.cue_id === editingCueId && spc.cues ? { ...spc, cues: { ...spc.cues, text: trimmed } } : spc
+        ),
+      }))
+    )
+
+    setEditingCueId(null)
+    setEditDraft('')
+  }
+
+  async function deleteCueFromLibrary(cue: Cue, poseId: string) {
+    const confirmed = window.confirm('Delete this cue permanently from your library?')
+    if (!confirmed) return
+
+    // First remove any sequence_pose_cues rows pointing at this cue (since they'd become orphaned with cue_id set to null)
+    await supabase.from('sequence_pose_cues').delete().eq('cue_id', cue.id)
+
+    const { error } = await supabase.from('cues').delete().eq('id', cue.id)
+
+    if (error) {
+      console.error('Error deleting cue:', error)
+      return
+    }
+
+    setCueLibraries((prev) => ({
+      ...prev,
+      [poseId]: (prev[poseId] || []).filter((c) => c.id !== cue.id),
+    }))
+
+    setSequencePoses((prev) =>
+      prev.map((sp) => ({
+        ...sp,
+        sequence_pose_cues: (sp.sequence_pose_cues || []).filter((spc) => spc.cue_id !== cue.id),
+      }))
     )
   }
 
@@ -329,11 +344,7 @@ export default function SequenceBuilder({
             )}
           </div>
         </div>
-        <Button
-          onClick={() => router.push(`/sequences/${sequence.id}/play`)}
-          size="sm"
-          className="flex items-center gap-2 shrink-0"
-        >
+        <Button onClick={() => router.push(`/sequences/${sequence.id}/play`)} size="sm" className="flex items-center gap-2 shrink-0">
           <Play size={14} />
           Start class
         </Button>
@@ -342,9 +353,7 @@ export default function SequenceBuilder({
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2">
           <div className="flex items-center justify-between mb-3">
-            <h2 className="font-medium text-sm">
-              Sequence — {sequencePoses.length} poses
-            </h2>
+            <h2 className="font-medium text-sm">Sequence — {sequencePoses.length} poses</h2>
           </div>
 
           {sequencePoses.length === 0 ? (
@@ -355,40 +364,31 @@ export default function SequenceBuilder({
           ) : (
             <div className="flex flex-col gap-6">
               {orderedSections.map((sectionName) => {
-                const posesInSection = sequencePoses.filter(
-                  (sp) => (sp.section || NO_SECTION) === sectionName
-                )
+                const posesInSection = sequencePoses.filter((sp) => (sp.section || NO_SECTION) === sectionName)
                 if (posesInSection.length === 0) return null
 
                 return (
                   <div key={sectionName}>
                     <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-2">
                       {sectionName}
-                      <span className="ml-2 text-muted-foreground/60 font-normal">
-                        {posesInSection.length}
-                      </span>
+                      <span className="ml-2 text-muted-foreground/60 font-normal">{posesInSection.length}</span>
                     </div>
                     <div className="flex flex-col gap-2">
                       {posesInSection.map((sp) => {
                         const primaryArea = sp.poses.body_area?.[0] || 'BALANCE'
                         const color = bodyAreaColors[primaryArea] || 'bg-gray-100'
                         const cuePickerOpen = openCuePicker === sp.id
-                        const stackedCues = [...(sp.sequence_pose_cues || [])].sort((a, b) => a.order_num - b.order_num)
-                        const availableCues = cueLibraries[sp.poses.id] || []
-                        const addedCueIds = new Set(stackedCues.map((spc) => spc.cue_id).filter(Boolean))
+                        const stackedCues = sp.sequence_pose_cues || []
+                        const fullCueLibrary = cueLibraries[sp.poses.id] || []
+                        const checkedCueIds = new Set(stackedCues.map((spc) => spc.cue_id).filter(Boolean))
 
                         return (
-                          <div
-                            key={sp.id}
-                            className="border rounded-lg bg-background overflow-hidden"
-                          >
+                          <div key={sp.id} className="border rounded-lg bg-background overflow-hidden">
                             <div className="flex items-center gap-3 p-3">
                               <GripVertical size={16} className="text-muted-foreground shrink-0" />
                               <div className={`w-8 h-8 rounded-md ${color} shrink-0`} />
                               <div className="flex-1 min-w-0">
-                                <div className="font-medium text-sm truncate">
-                                  {sp.poses.name}
-                                </div>
+                                <div className="font-medium text-sm truncate">{sp.poses.name}</div>
                                 <div className="text-xs text-muted-foreground">
                                   {sp.poses.sanskrit_name} · {sp.breath_count} breaths
                                 </div>
@@ -405,13 +405,8 @@ export default function SequenceBuilder({
                                 ))}
                               </select>
 
-                              <span className="text-xs text-muted-foreground shrink-0">
-                                #{sp.order_num}
-                              </span>
-                              <button
-                                onClick={() => removePose(sp.id)}
-                                className="text-muted-foreground hover:text-red-500 transition-colors shrink-0"
-                              >
+                              <span className="text-xs text-muted-foreground shrink-0">#{sp.order_num}</span>
+                              <button onClick={() => removePose(sp.id)} className="text-muted-foreground hover:text-red-500 transition-colors shrink-0">
                                 <Trash2 size={14} />
                               </button>
                             </div>
@@ -429,72 +424,89 @@ export default function SequenceBuilder({
                                 ) : (
                                   <span className="flex-1 text-muted-foreground">Add teaching cues…</span>
                                 )}
-                                {cuePickerOpen ? (
-                                  <ChevronUp size={13} className="text-muted-foreground shrink-0" />
-                                ) : (
-                                  <ChevronDown size={13} className="text-muted-foreground shrink-0" />
-                                )}
+                                {cuePickerOpen ? <ChevronUp size={13} className="text-muted-foreground shrink-0" /> : <ChevronDown size={13} className="text-muted-foreground shrink-0" />}
                               </button>
-
-                              {/* Always-visible stacked cue list, even when picker is collapsed */}
-                              {stackedCues.length > 0 && (
-                                <div className="px-3 pb-2 flex flex-col gap-1">
-                                  {stackedCues.map((spc) => (
-                                    <div
-                                      key={spc.id}
-                                      className="flex items-start gap-2 text-xs bg-background border rounded-md px-2.5 py-1.5"
-                                    >
-                                      <span className="flex-1">
-                                        {spc.cues?.text || spc.custom_text}
-                                      </span>
-                                      <button
-                                        onClick={() => removeCueFromStack(sp.id, spc.id)}
-                                        className="text-muted-foreground hover:text-red-500 shrink-0"
-                                      >
-                                        <X size={12} />
-                                      </button>
-                                    </div>
-                                  ))}
-                                </div>
-                              )}
 
                               {cuePickerOpen && (
                                 <div className="px-3 pb-3 pt-1">
-                                  {availableCues.length > 0 && (
-                                    <div className="flex flex-col gap-1 mb-2">
-                                      {availableCues
-                                        .filter((cue) => !addedCueIds.has(cue.id))
-                                        .map((cue) => (
-                                          <button
-                                            key={cue.id}
-                                            onClick={() => addLibraryCueToStack(sp, cue)}
-                                            className="text-left text-xs px-2.5 py-1.5 rounded-md border bg-background hover:bg-secondary transition-colors flex items-center gap-1.5"
-                                          >
-                                            <Plus size={11} className="shrink-0 text-muted-foreground" />
-                                            <span>{cue.text}</span>
-                                            {!cue.is_default && (
-                                              <span className="opacity-60 shrink-0">· yours</span>
-                                            )}
-                                          </button>
-                                        ))}
-                                    </div>
-                                  )}
+                                  <div className="flex flex-col gap-1 mb-2">
+                                    {fullCueLibrary.map((cue) => {
+                                      const isChecked = checkedCueIds.has(cue.id)
+                                      const isEditing = editingCueId === cue.id
+
+                                      return (
+                                        <div
+                                          key={cue.id}
+                                          className={`flex items-start gap-2 text-xs px-2.5 py-1.5 rounded-md ${
+                                            isChecked ? 'bg-green-50' : ''
+                                          }`}
+                                        >
+                                          {isEditing ? (
+                                            <>
+                                              <input
+                                                type="text"
+                                                value={editDraft}
+                                                onChange={(e) => setEditDraft(e.target.value)}
+                                                onKeyDown={(e) => e.key === 'Enter' && saveEditedCue(sp.poses.id)}
+                                                autoFocus
+                                                className="flex-1 text-xs px-1.5 py-1 border rounded-md bg-background"
+                                              />
+                                              <button onClick={() => saveEditedCue(sp.poses.id)} className="text-green-600 shrink-0">
+                                                <Check size={14} />
+                                              </button>
+                                              <button onClick={() => setEditingCueId(null)} className="text-muted-foreground shrink-0">
+                                                <X size={14} />
+                                              </button>
+                                            </>
+                                          ) : (
+                                            <>
+                                              <input
+                                                type="checkbox"
+                                                checked={isChecked}
+                                                onChange={() => toggleLibraryCue(sp, cue)}
+                                                className="mt-0.5 shrink-0"
+                                              />
+                                              <label
+                                                onClick={() => toggleLibraryCue(sp, cue)}
+                                                className="flex-1 cursor-pointer"
+                                              >
+                                                {cue.text}
+                                                {!cue.is_default && <span className="text-muted-foreground ml-1">· yours</span>}
+                                              </label>
+                                              {!cue.is_default && (
+                                                <div className="flex gap-1 shrink-0">
+                                                  <button
+                                                    onClick={() => startEditingCue(cue)}
+                                                    className="text-muted-foreground hover:text-foreground"
+                                                  >
+                                                    <Pencil size={12} />
+                                                  </button>
+                                                  <button
+                                                    onClick={() => deleteCueFromLibrary(cue, sp.poses.id)}
+                                                    className="text-muted-foreground hover:text-red-500"
+                                                  >
+                                                    <Trash2 size={12} />
+                                                  </button>
+                                                </div>
+                                              )}
+                                            </>
+                                          )}
+                                        </div>
+                                      )
+                                    })}
+                                  </div>
 
                                   <div className="flex gap-1.5">
                                     <input
                                       type="text"
                                       placeholder="Write your own cue…"
-                                      value={customCueDrafts[sp.id] || ''}
-                                      onChange={(e) =>
-                                        setCustomCueDrafts((prev) => ({ ...prev, [sp.id]: e.target.value }))
-                                      }
-                                      onKeyDown={(e) =>
-                                        e.key === 'Enter' && addCustomCueToStack(sp)
-                                      }
+                                      value={newCueDrafts[sp.id] || ''}
+                                      onChange={(e) => setNewCueDrafts((prev) => ({ ...prev, [sp.id]: e.target.value }))}
+                                      onKeyDown={(e) => e.key === 'Enter' && addNewCue(sp)}
                                       className="flex-1 text-xs px-2 py-1.5 border rounded-md bg-background"
                                     />
                                     <button
-                                      onClick={() => addCustomCueToStack(sp)}
+                                      onClick={() => addNewCue(sp)}
                                       className="text-xs px-3 py-1.5 bg-primary text-primary-foreground rounded-md shrink-0"
                                     >
                                       Add
@@ -527,25 +539,23 @@ export default function SequenceBuilder({
                   key={s}
                   onClick={() => setActiveSection(s)}
                   className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${
-                    activeSection === s
-                      ? 'bg-primary text-primary-foreground border-primary'
-                      : 'hover:bg-secondary'
+                    activeSection === s ? 'bg-primary text-primary-foreground border-primary' : 'hover:bg-secondary'
                   }`}
                 >
                   {s}
                 </button>
               ))}
-              {Array.from(new Set([
-                ...usedSections.filter((s) => !DEFAULT_SECTIONS.includes(s) && s !== NO_SECTION),
-                ...(activeSection !== NO_SECTION && !DEFAULT_SECTIONS.includes(activeSection) ? [activeSection] : []),
-              ])).map((s) => (
+              {Array.from(
+                new Set([
+                  ...usedSections.filter((s) => !DEFAULT_SECTIONS.includes(s) && s !== NO_SECTION),
+                  ...(activeSection !== NO_SECTION && !DEFAULT_SECTIONS.includes(activeSection) ? [activeSection] : []),
+                ])
+              ).map((s) => (
                 <button
                   key={s}
                   onClick={() => setActiveSection(s)}
                   className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${
-                    activeSection === s
-                      ? 'bg-primary text-primary-foreground border-primary'
-                      : 'hover:bg-secondary'
+                    activeSection === s ? 'bg-primary text-primary-foreground border-primary' : 'hover:bg-secondary'
                   }`}
                 >
                   {s}
@@ -554,9 +564,7 @@ export default function SequenceBuilder({
               <button
                 onClick={() => setActiveSection(NO_SECTION)}
                 className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${
-                  activeSection === NO_SECTION
-                    ? 'bg-primary text-primary-foreground border-primary'
-                    : 'hover:bg-secondary'
+                  activeSection === NO_SECTION ? 'bg-primary text-primary-foreground border-primary' : 'hover:bg-secondary'
                 }`}
               >
                 Unsorted
@@ -564,10 +572,7 @@ export default function SequenceBuilder({
             </div>
 
             {!showAddSection ? (
-              <button
-                onClick={() => setShowAddSection(true)}
-                className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1"
-              >
+              <button onClick={() => setShowAddSection(true)} className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1">
                 <Plus size={12} />
                 Add custom section
               </button>
@@ -582,10 +587,7 @@ export default function SequenceBuilder({
                   onKeyDown={(e) => e.key === 'Enter' && addCustomSection()}
                   className="flex-1 text-xs px-2 py-1 border rounded-md bg-background"
                 />
-                <button
-                  onClick={addCustomSection}
-                  className="text-xs px-2 py-1 bg-primary text-primary-foreground rounded-md"
-                >
+                <button onClick={addCustomSection} className="text-xs px-2 py-1 bg-primary text-primary-foreground rounded-md">
                   Add
                 </button>
               </div>
@@ -607,9 +609,7 @@ export default function SequenceBuilder({
             {filteredPoses.map((pose) => {
               const primaryArea = pose.body_area?.[0] || 'BALANCE'
               const color = bodyAreaColors[primaryArea] || 'bg-gray-100'
-              const timesAdded = sequencePoses.filter(
-                (sp) => sp.poses.id === pose.id
-              ).length
+              const timesAdded = sequencePoses.filter((sp) => sp.poses.id === pose.id).length
 
               return (
                 <div
@@ -620,19 +620,12 @@ export default function SequenceBuilder({
                   <div className={`w-7 h-7 rounded ${color} shrink-0`} />
                   <div className="flex-1 min-w-0">
                     <div className="text-sm font-medium truncate">{pose.name}</div>
-                    <div className="text-xs text-muted-foreground truncate">
-                      {pose.sanskrit_name}
-                    </div>
+                    <div className="text-xs text-muted-foreground truncate">{pose.sanskrit_name}</div>
                   </div>
                   {timesAdded > 0 && (
-                    <span className="text-xs text-muted-foreground shrink-0 bg-secondary px-1.5 py-0.5 rounded-full">
-                      ×{timesAdded}
-                    </span>
+                    <span className="text-xs text-muted-foreground shrink-0 bg-secondary px-1.5 py-0.5 rounded-full">×{timesAdded}</span>
                   )}
-                  <Plus
-                    size={14}
-                    className="text-muted-foreground opacity-0 group-hover:opacity-100 shrink-0"
-                  />
+                  <Plus size={14} className="text-muted-foreground opacity-0 group-hover:opacity-100 shrink-0" />
                 </div>
               )
             })}
