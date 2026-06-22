@@ -4,7 +4,7 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
-import { Trash2, GripVertical, Plus, Play, MessageSquare, ChevronDown, ChevronUp, Pencil, Check, X } from 'lucide-react'
+import { Trash2, GripVertical, Plus, Play, MessageSquare, ChevronDown, ChevronUp, Pencil, Check, X, Printer } from 'lucide-react'
 
 type Pose = {
   id: string
@@ -344,10 +344,21 @@ export default function SequenceBuilder({
             )}
           </div>
         </div>
-        <Button onClick={() => router.push(`/sequences/${sequence.id}/play`)} size="sm" className="flex items-center gap-2 shrink-0">
+        <div className="flex gap-2 shrink-0">
+        <Button
+          onClick={() => router.push(`/sequences/${sequence.id}/print`)}
+          size="sm"
+          variant="outline"
+          className="flex items-center gap-2"
+        >
+          <Printer size={14} />
+          Print
+        </Button>
+        <Button onClick={() => router.push(`/sequences/${sequence.id}/play`)} size="sm" className="flex items-center gap-2">
           <Play size={14} />
           Start class
         </Button>
+      </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">

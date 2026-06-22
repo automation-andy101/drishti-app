@@ -50,7 +50,7 @@ export default async function PosesPage() {
       </div>
 
       {/* Pose grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
         {poses.map((pose) => {
           const primaryArea = pose.body_area?.[0] || 'BALANCE'
           const config = bodyAreaConfig[primaryArea] || { color: 'bg-gray-100', emoji: '🧘' }
@@ -61,12 +61,12 @@ export default async function PosesPage() {
               className="border rounded-lg overflow-hidden hover:border-primary transition-colors cursor-pointer"
             >
               {/* Image placeholder */}
-              <div className={`${config.color} h-32 flex items-center justify-center`}>
+              <div className={`${pose.image_url ? 'bg-white' : config.color} h-52 flex items-center justify-center overflow-hidden`}>
                 {pose.image_url ? (
                   <img
                     src={pose.image_url}
                     alt={pose.name}
-                    className="h-full w-full object-cover"
+                    className="h-full w-full object-contain p-2"
                   />
                 ) : (
                   <span className="text-5xl">{config.emoji}</span>
