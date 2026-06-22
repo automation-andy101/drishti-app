@@ -18,6 +18,12 @@ export default async function SequenceBuilderPage({
     .eq('id', id)
     .single()
 
+  const { data: sectionNotes } = await supabase
+  .from('sequence_section_notes')
+  .select('*')
+  .eq('sequence_id', id)
+  .order('order_num')
+
   if (error || !sequence) return notFound()
 
   const { data: sequencePoses } = await supabase
@@ -30,6 +36,17 @@ export default async function SequenceBuilderPage({
     .from('poses')
     .select('*')
     .order('name')
+
+  const { data: pranayamaTechniques } = await supabase
+    .from('pranayama_techniques')
+    .select('*')
+    .order('name')
+
+  const { data: sequencePranayama } = await supabase
+    .from('sequence_pranayama')
+    .select('*, pranayama_techniques(*), sequence_pranayama_cues(*, cues(*))')
+    .eq('sequence_id', id)
+    .order('order_num')
 
   const { data: { user } } = await supabase.auth.getUser()
 
@@ -44,6 +61,9 @@ export default async function SequenceBuilderPage({
       sequence={sequence}
       initialPoses={sequencePoses || []}
       poseLibrary={poses || []}
+      pranayamaLibrary={pranayamaTechniques || []}
+      initialPranayama={sequencePranayama || []}
+      initialSectionNotes={sectionNotes || []}
       profileId={profile?.id || null}
     />
   )

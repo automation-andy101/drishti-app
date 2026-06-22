@@ -4,6 +4,8 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
+import PranayamaPanel from './pranayama-panel'
+import PranayamaRow from './pranayama-row'
 import { Trash2, GripVertical, Plus, Play, MessageSquare, ChevronDown, ChevronUp, Pencil, Check, X, Printer } from 'lucide-react'
 
 type Pose = {
@@ -51,6 +53,13 @@ type Sequence = {
   peak_pose: string | null
 }
 
+type SectionNote = {
+  id: string
+  section: string
+  text: string
+  order_num: number
+}
+
 const bodyAreaColors: Record<string, string> = {
   HIPS: 'bg-purple-100',
   HAMSTRINGS: 'bg-blue-100',
@@ -64,18 +73,46 @@ const bodyAreaColors: Record<string, string> = {
   FORWARD_FOLDS: 'bg-emerald-100',
 }
 
-const DEFAULT_SECTIONS = ['Warm-up', 'Standing poses', 'Peak pose', 'Cool-down', 'Final relaxation']
+const DEFAULT_SECTIONS = ['Introduction', 'Pranayama', 'Warm-up', 'Standing poses', 'Peak pose', 'Cool-down', 'Final relaxation']
 const NO_SECTION = 'Unsorted'
+
+type PranayamaTechnique = {
+  id: string
+  name: string
+  sanskrit_name: string | null
+  duration_mins: number
+}
+
+type SequencePranayamaCue = {
+  id: string
+  cue_id: string | null
+  custom_text: string | null
+  cues: { id: string; text: string; is_default: boolean; created_by: string | null } | null
+}
+
+type SequencePranayamaItem = {
+  id: string
+  order_num: number
+  duration_mins: number | null
+  pranayama_techniques: PranayamaTechnique
+  sequence_pranayama_cues: SequencePranayamaCue[]
+}
 
 export default function SequenceBuilder({
   sequence,
   initialPoses,
   poseLibrary,
+  pranayamaLibrary,
+  initialPranayama,
+  initialSectionNotes,
   profileId,
 }: {
   sequence: Sequence
   initialPoses: SequencePose[]
   poseLibrary: Pose[]
+  pranayamaLibrary: PranayamaTechnique[]
+  initialPranayama: SequencePranayamaItem[]
+  initialSectionNotes: SectionNote[]
   profileId: string | null
 }) {
   const router = useRouter()
@@ -90,6 +127,36 @@ export default function SequenceBuilder({
   const [newCueDrafts, setNewCueDrafts] = useState<Record<string, string>>({})
   const [editingCueId, setEditingCueId] = useState<string | null>(null)
   const [editDraft, setEditDraft] = useState('')
+  const [pranayamaItems, setPranayamaItems] = useState<SequencePranayamaItem[]>(initialPranayama)
+  const [sectionNotes, setSectionNotes] = useState<SectionNote[]>(initialSectionNotes)
+  const [newNoteDrafts, setNewNoteDrafts] = useState<Record<string, string>>({})
+
+  async function addSectionNote(sectionName: string) {
+    const text = newNoteDrafts[sectionName]?.trim()
+    if (!text) return
+
+    const notesInSection = sectionNotes.filter((n) => n.section === sectionName)
+    const nextOrder = notesInSection.length
+
+    const { data, error } = await supabase
+      .from('sequence_section_notes')
+      .insert({ sequence_id: sequence.id, section: sectionName, text, order_num: nextOrder })
+      .select()
+      .single()
+
+    if (error) {
+      console.error('Error adding note:', error)
+      return
+    }
+
+    setSectionNotes((prev) => [...prev, data])
+    setNewNoteDrafts((prev) => ({ ...prev, [sectionName]: '' }))
+  }
+
+  async function removeSectionNote(noteId: string) {
+    await supabase.from('sequence_section_notes').delete().eq('id', noteId)
+    setSectionNotes((prev) => prev.filter((n) => n.id !== noteId))
+  }
 
   const filteredPoses = poseLibrary.filter((p) =>
     p.name.toLowerCase().includes(search.toLowerCase()) ||
@@ -99,8 +166,9 @@ export default function SequenceBuilder({
   const usedSections = Array.from(new Set(sequencePoses.map((sp) => sp.section || NO_SECTION)))
 
   const orderedSections = [
-    ...DEFAULT_SECTIONS.filter((s) => usedSections.includes(s)),
+    ...DEFAULT_SECTIONS.filter((s) => usedSections.includes(s) || s === activeSection),
     ...usedSections.filter((s) => !DEFAULT_SECTIONS.includes(s) && s !== NO_SECTION),
+    ...(activeSection !== NO_SECTION && !DEFAULT_SECTIONS.includes(activeSection) ? [activeSection] : []),
     ...(usedSections.includes(NO_SECTION) ? [NO_SECTION] : []),
   ]
 
@@ -131,6 +199,41 @@ export default function SequenceBuilder({
     }
 
     setSequencePoses((prev) => [...prev, { ...data, sequence_pose_cues: data.sequence_pose_cues || [] }])
+  }
+
+  async function addPranayama(technique: PranayamaTechnique) {
+    const maxOrder = pranayamaItems.length > 0 ? Math.max(...pranayamaItems.map((p) => p.order_num)) : 0
+
+    const { data, error } = await supabase
+      .from('sequence_pranayama')
+      .insert({
+        sequence_id: sequence.id,
+        pranayama_id: technique.id,
+        order_num: maxOrder + 1,
+        duration_mins: technique.duration_mins,
+      })
+      .select('*, pranayama_techniques(*), sequence_pranayama_cues(*, cues(*))')
+      .single()
+
+    if (error) {
+      console.error('Error adding pranayama:', error)
+      return
+    }
+
+    setPranayamaItems((prev) => [...prev, { ...data, sequence_pranayama_cues: data.sequence_pranayama_cues || [] }])
+  }
+
+  async function removePranayama(id: string) {
+    await supabase.from('sequence_pranayama').delete().eq('id', id)
+    setPranayamaItems((prev) => prev.filter((p) => p.id !== id))
+  }
+
+  function updatePranayamaCues(id: string, updatedCues: SequencePranayamaCue[]) {
+    setPranayamaItems((prev) => prev.map((p) => (p.id === id ? { ...p, sequence_pranayama_cues: updatedCues } : p)))
+  }
+
+  function pranayamaAddedCount(techniqueId: string) {
+    return pranayamaItems.filter((p) => p.pranayama_techniques.id === techniqueId).length
   }
 
   async function removePose(sequencePoseId: string) {
@@ -183,12 +286,10 @@ export default function SequenceBuilder({
     }
   }
 
-  // Toggle a library cue on/off for this pose instance — checkbox style, stable position
   async function toggleLibraryCue(sp: SequencePose, cue: Cue) {
     const existing = (sp.sequence_pose_cues || []).find((spc) => spc.cue_id === cue.id)
 
     if (existing) {
-      // Uncheck — remove the join row
       const { error } = await supabase.from('sequence_pose_cues').delete().eq('id', existing.id)
       if (error) {
         console.error('Error removing cue:', error)
@@ -202,7 +303,6 @@ export default function SequenceBuilder({
         )
       )
     } else {
-      // Check — add the join row
       const nextOrder = (sp.sequence_pose_cues || []).length
       const { data, error } = await supabase
         .from('sequence_pose_cues')
@@ -221,7 +321,6 @@ export default function SequenceBuilder({
     }
   }
 
-  // Write a brand new cue: saves to personal library AND attaches it to this pose instance immediately
   async function addNewCue(sp: SequencePose) {
     const text = newCueDrafts[sp.id]?.trim()
     if (!text) return
@@ -302,7 +401,6 @@ export default function SequenceBuilder({
     const confirmed = window.confirm('Delete this cue permanently from your library?')
     if (!confirmed) return
 
-    // First remove any sequence_pose_cues rows pointing at this cue (since they'd become orphaned with cue_id set to null)
     await supabase.from('sequence_pose_cues').delete().eq('cue_id', cue.id)
 
     const { error } = await supabase.from('cues').delete().eq('id', cue.id)
@@ -345,20 +443,20 @@ export default function SequenceBuilder({
           </div>
         </div>
         <div className="flex gap-2 shrink-0">
-        <Button
-          onClick={() => router.push(`/sequences/${sequence.id}/print`)}
-          size="sm"
-          variant="outline"
-          className="flex items-center gap-2"
-        >
-          <Printer size={14} />
-          Print
-        </Button>
-        <Button onClick={() => router.push(`/sequences/${sequence.id}/play`)} size="sm" className="flex items-center gap-2">
-          <Play size={14} />
-          Start class
-        </Button>
-      </div>
+          <Button
+            onClick={() => router.push(`/sequences/${sequence.id}/print`)}
+            size="sm"
+            variant="outline"
+            className="flex items-center gap-2"
+          >
+            <Printer size={14} />
+            Print
+          </Button>
+          <Button onClick={() => router.push(`/sequences/${sequence.id}/play`)} size="sm" className="flex items-center gap-2">
+            <Play size={14} />
+            Start class
+          </Button>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -367,23 +465,111 @@ export default function SequenceBuilder({
             <h2 className="font-medium text-sm">Sequence — {sequencePoses.length} poses</h2>
           </div>
 
-          {sequencePoses.length === 0 ? (
-            <div className="border rounded-lg p-8 text-center text-muted-foreground">
-              <div className="text-3xl mb-2">🧘</div>
-              <p className="text-sm">Add poses from the library →</p>
-            </div>
-          ) : (
-            <div className="flex flex-col gap-6">
-              {orderedSections.map((sectionName) => {
-                const posesInSection = sequencePoses.filter((sp) => (sp.section || NO_SECTION) === sectionName)
-                if (posesInSection.length === 0) return null
+          <div className="flex flex-col gap-6">
+            {orderedSections.map((sectionName) => {
+              if (sectionName === 'Introduction') {
+                const notesInSection = sectionNotes.filter((n) => n.section === sectionName)
+                const isActiveEmpty = notesInSection.length === 0 && sectionName === activeSection
+                if (notesInSection.length === 0 && !isActiveEmpty) return null
 
                 return (
                   <div key={sectionName}>
-                    <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-2">
+                    <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-2 flex items-center gap-2">
                       {sectionName}
-                      <span className="ml-2 text-muted-foreground/60 font-normal">{posesInSection.length}</span>
+                      <span className="text-muted-foreground/60 font-normal">{notesInSection.length}</span>
+                      {isActiveEmpty && <span className="text-primary font-normal normal-case">← adding here</span>}
                     </div>
+                    <div className="flex flex-col gap-2 mb-2">
+                      {notesInSection.map((note) => (
+                        <div key={note.id} className="border rounded-lg p-3 bg-background flex items-start justify-between gap-3">
+                          <p className="text-sm flex-1">{note.text}</p>
+                          <button
+                            onClick={() => removeSectionNote(note.id)}
+                            className="text-muted-foreground hover:text-red-500 transition-colors shrink-0 cursor-pointer"
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        placeholder="e.g. Welcome everyone, my name is..."
+                        value={newNoteDrafts[sectionName] || ''}
+                        onChange={(e) => setNewNoteDrafts((prev) => ({ ...prev, [sectionName]: e.target.value }))}
+                        onKeyDown={(e) => e.key === 'Enter' && addSectionNote(sectionName)}
+                        className="flex-1 text-sm px-3 py-2 border rounded-md bg-background"
+                      />
+                      <button
+                        onClick={() => addSectionNote(sectionName)}
+                        className="text-sm px-4 py-2 bg-primary text-primary-foreground rounded-md cursor-pointer shrink-0"
+                      >
+                        Add
+                      </button>
+                    </div>
+                  </div>
+                )
+              }
+
+              if (sectionName === 'Pranayama') {
+                const isActiveEmpty = pranayamaItems.length === 0 && sectionName === activeSection
+                if (pranayamaItems.length === 0 && !isActiveEmpty) return null
+
+                return (
+                  <div key={sectionName}>
+                    <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-2 flex items-center gap-2">
+                      {sectionName}
+                      <span className="text-muted-foreground/60 font-normal">{pranayamaItems.length}</span>
+                      {isActiveEmpty && <span className="text-primary font-normal normal-case">← adding here</span>}
+                    </div>
+                    {pranayamaItems.length === 0 ? (
+                      <div className="border border-dashed rounded-lg p-4 text-center text-muted-foreground text-xs">
+                        Pick a breathing technique from the panel to add it here
+                      </div>
+                    ) : (
+                      <div className="flex flex-col gap-2">
+                        {pranayamaItems
+                          .sort((a, b) => a.order_num - b.order_num)
+                          .map((item) => (
+                            <PranayamaRow
+                              key={item.id}
+                              item={item}
+                              profileId={profileId}
+                              onRemove={removePranayama}
+                              onUpdate={updatePranayamaCues}
+                            />
+                          ))}
+                      </div>
+                    )}
+                  </div>
+                )
+              }
+
+              const posesInSection = sequencePoses.filter(
+                (sp) => (sp.section || NO_SECTION) === sectionName
+              )
+
+              const isActiveEmpty = posesInSection.length === 0 && sectionName === activeSection
+
+              if (posesInSection.length === 0 && !isActiveEmpty) return null
+
+              return (
+                <div key={sectionName}>
+                  <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-2 flex items-center gap-2">
+                    {sectionName}
+                    <span className="text-muted-foreground/60 font-normal">
+                      {posesInSection.length}
+                    </span>
+                    {isActiveEmpty && (
+                      <span className="text-primary font-normal normal-case">← adding here</span>
+                    )}
+                  </div>
+                  {posesInSection.length === 0 ? (
+                    <div className="border border-dashed rounded-lg p-4 text-center text-muted-foreground text-xs">
+                      Pick a pose from the library to add it here
+                    </div>
+                  ) : (
                     <div className="flex flex-col gap-2">
                       {posesInSection.map((sp) => {
                         const primaryArea = sp.poses.body_area?.[0] || 'BALANCE'
@@ -530,116 +716,130 @@ export default function SequenceBuilder({
                         )
                       })}
                     </div>
-                  </div>
-                )
-              })}
-            </div>
-          )}
-        </div>
-
-        <div>
-          <h2 className="font-medium text-sm mb-3">Pose library</h2>
-
-          <div className="mb-3">
-            <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-1.5 block">
-              Add poses to
-            </label>
-            <div className="flex flex-wrap gap-1.5 mb-2">
-              {DEFAULT_SECTIONS.map((s) => (
-                <button
-                  key={s}
-                  onClick={() => setActiveSection(s)}
-                  className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${
-                    activeSection === s ? 'bg-primary text-primary-foreground border-primary' : 'hover:bg-secondary'
-                  }`}
-                >
-                  {s}
-                </button>
-              ))}
-              {Array.from(
-                new Set([
-                  ...usedSections.filter((s) => !DEFAULT_SECTIONS.includes(s) && s !== NO_SECTION),
-                  ...(activeSection !== NO_SECTION && !DEFAULT_SECTIONS.includes(activeSection) ? [activeSection] : []),
-                ])
-              ).map((s) => (
-                <button
-                  key={s}
-                  onClick={() => setActiveSection(s)}
-                  className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${
-                    activeSection === s ? 'bg-primary text-primary-foreground border-primary' : 'hover:bg-secondary'
-                  }`}
-                >
-                  {s}
-                </button>
-              ))}
-              <button
-                onClick={() => setActiveSection(NO_SECTION)}
-                className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${
-                  activeSection === NO_SECTION ? 'bg-primary text-primary-foreground border-primary' : 'hover:bg-secondary'
-                }`}
-              >
-                Unsorted
-              </button>
-            </div>
-
-            {!showAddSection ? (
-              <button onClick={() => setShowAddSection(true)} className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1">
-                <Plus size={12} />
-                Add custom section
-              </button>
-            ) : (
-              <div className="flex gap-1.5">
-                <input
-                  type="text"
-                  autoFocus
-                  placeholder="e.g. Core work"
-                  value={customSectionInput}
-                  onChange={(e) => setCustomSectionInput(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && addCustomSection()}
-                  className="flex-1 text-xs px-2 py-1 border rounded-md bg-background"
-                />
-                <button onClick={addCustomSection} className="text-xs px-2 py-1 bg-primary text-primary-foreground rounded-md">
-                  Add
-                </button>
-              </div>
-            )}
-
-            <p className="text-xs text-muted-foreground mt-2">
-              New poses will be added to <span className="font-medium">{activeSection}</span>
-            </p>
-          </div>
-
-          <input
-            type="text"
-            placeholder="Search poses..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="w-full text-sm px-3 py-2 border rounded-md mb-3 bg-background"
-          />
-          <div className="flex flex-col gap-1.5 max-h-[50vh] overflow-y-auto pr-1">
-            {filteredPoses.map((pose) => {
-              const primaryArea = pose.body_area?.[0] || 'BALANCE'
-              const color = bodyAreaColors[primaryArea] || 'bg-gray-100'
-              const timesAdded = sequencePoses.filter((sp) => sp.poses.id === pose.id).length
-
-              return (
-                <div
-                  key={pose.id}
-                  className="flex items-center gap-2 p-2 rounded-md hover:bg-secondary transition-colors cursor-pointer group"
-                  onClick={() => addPose(pose)}
-                >
-                  <div className={`w-7 h-7 rounded ${color} shrink-0`} />
-                  <div className="flex-1 min-w-0">
-                    <div className="text-sm font-medium truncate">{pose.name}</div>
-                    <div className="text-xs text-muted-foreground truncate">{pose.sanskrit_name}</div>
-                  </div>
-                  {timesAdded > 0 && (
-                    <span className="text-xs text-muted-foreground shrink-0 bg-secondary px-1.5 py-0.5 rounded-full">×{timesAdded}</span>
                   )}
-                  <Plus size={14} className="text-muted-foreground opacity-0 group-hover:opacity-100 shrink-0" />
                 </div>
               )
             })}
+          </div>
+        </div>
+
+        <div>
+          <div>
+            <h2 className="font-medium text-sm mb-3">
+              {activeSection === 'Pranayama' ? 'Breathing techniques' : 'Pose library'}
+            </h2>
+
+            <div className="mb-3">
+              <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-1.5 block">
+                Add poses to
+              </label>
+              <div className="flex flex-wrap gap-1.5 mb-2">
+                {DEFAULT_SECTIONS.map((s) => (
+                  <button
+                    key={s}
+                    onClick={() => setActiveSection(s)}
+                    className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${
+                      activeSection === s ? 'bg-primary text-primary-foreground border-primary' : 'hover:bg-secondary'
+                    }`}
+                  >
+                    {s}
+                  </button>
+                ))}
+                {Array.from(
+                  new Set([
+                    ...usedSections.filter((s) => !DEFAULT_SECTIONS.includes(s) && s !== NO_SECTION),
+                    ...(activeSection !== NO_SECTION && !DEFAULT_SECTIONS.includes(activeSection) ? [activeSection] : []),
+                  ])
+                ).map((s) => (
+                  <button
+                    key={s}
+                    onClick={() => setActiveSection(s)}
+                    className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${
+                      activeSection === s ? 'bg-primary text-primary-foreground border-primary' : 'hover:bg-secondary'
+                    }`}
+                  >
+                    {s}
+                  </button>
+                ))}
+                <button
+                  onClick={() => setActiveSection(NO_SECTION)}
+                  className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${
+                    activeSection === NO_SECTION ? 'bg-primary text-primary-foreground border-primary' : 'hover:bg-secondary'
+                  }`}
+                >
+                  Unsorted
+                </button>
+              </div>
+
+              {!showAddSection ? (
+                <button onClick={() => setShowAddSection(true)} className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1">
+                  <Plus size={12} />
+                  Add custom section
+                </button>
+              ) : (
+                <div className="flex gap-1.5">
+                  <input
+                    type="text"
+                    autoFocus
+                    placeholder="e.g. Core work"
+                    value={customSectionInput}
+                    onChange={(e) => setCustomSectionInput(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && addCustomSection()}
+                    className="flex-1 text-xs px-2 py-1 border rounded-md bg-background"
+                  />
+                  <button onClick={addCustomSection} className="text-xs px-2 py-1 bg-primary text-primary-foreground rounded-md">
+                    Add
+                  </button>
+                </div>
+              )}
+
+              <p className="text-xs text-muted-foreground mt-2">
+                New poses will be added to <span className="font-medium">{activeSection}</span>
+              </p>
+            </div>
+
+            {activeSection === 'Pranayama' ? (
+              <PranayamaPanel
+                techniques={pranayamaLibrary}
+                onAdd={addPranayama}
+                addedCount={pranayamaAddedCount}
+              />
+            ) : (
+              <>
+                <input
+                  type="text"
+                  placeholder="Search poses..."
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  className="w-full text-sm px-3 py-2 border rounded-md mb-3 bg-background"
+                />
+                <div className="flex flex-col gap-1.5 max-h-[50vh] overflow-y-auto pr-1">
+                  {filteredPoses.map((pose) => {
+                    const primaryArea = pose.body_area?.[0] || 'BALANCE'
+                    const color = bodyAreaColors[primaryArea] || 'bg-gray-100'
+                    const timesAdded = sequencePoses.filter((sp) => sp.poses.id === pose.id).length
+
+                    return (
+                      <div
+                        key={pose.id}
+                        className="flex items-center gap-2 p-2 rounded-md hover:bg-secondary transition-colors cursor-pointer group"
+                        onClick={() => addPose(pose)}
+                      >
+                        <div className={`w-7 h-7 rounded ${color} shrink-0`} />
+                        <div className="flex-1 min-w-0">
+                          <div className="text-sm font-medium truncate">{pose.name}</div>
+                          <div className="text-xs text-muted-foreground truncate">{pose.sanskrit_name}</div>
+                        </div>
+                        {timesAdded > 0 && (
+                          <span className="text-xs text-muted-foreground shrink-0 bg-secondary px-1.5 py-0.5 rounded-full">×{timesAdded}</span>
+                        )}
+                        <Plus size={14} className="text-muted-foreground opacity-0 group-hover:opacity-100 shrink-0" />
+                      </div>
+                    )
+                  })}
+                </div>
+              </>
+            )}
           </div>
         </div>
       </div>
