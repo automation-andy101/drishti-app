@@ -1,9 +1,5 @@
 'use client'
 
-import { useState } from 'react'
-import Link from 'next/link'
-import { usePathname } from 'next/navigation'
-import { cn } from '@/lib/utils'
 import {
   LayoutDashboard,
   ListMusic,
@@ -12,9 +8,14 @@ import {
   Menu,
   X,
   MessageSquareText,
+  ShieldCheck,
 } from 'lucide-react'
+import { usePathname } from 'next/navigation'
+import { useState } from 'react'
+import Link from 'next/link'
+import { cn } from '@/lib/utils'
 
-const links = [
+const baseLinks = [
   { href: '/', label: 'Dashboard', icon: LayoutDashboard },
   { href: '/sequences', label: 'Sequences', icon: ListMusic },
   { href: '/poses', label: 'Pose library', icon: BookOpen },
@@ -22,9 +23,13 @@ const links = [
   { href: '/settings', label: 'Settings', icon: Settings },
 ]
 
-export default function Sidebar() {
+export default function Sidebar({ isAdmin }: { isAdmin: boolean }) {
   const pathname = usePathname()
   const [open, setOpen] = useState(false)
+
+  const links = isAdmin
+    ? [...baseLinks, { href: '/admin/poses', label: 'Admin: Poses', icon: ShieldCheck }]
+    : baseLinks
 
   return (
     <>
