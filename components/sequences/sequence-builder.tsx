@@ -15,6 +15,7 @@ type Pose = {
   difficulty: string
   body_area: string[]
   styles: string[]
+  image_url: string | null
 }
 
 type Cue = {
@@ -583,7 +584,11 @@ export default function SequenceBuilder({
                           <div key={sp.id} className="border rounded-lg bg-background overflow-hidden">
                             <div className="flex items-center gap-3 p-3">
                               <GripVertical size={16} className="text-muted-foreground shrink-0" />
-                              <div className={`w-8 h-8 rounded-md ${color} shrink-0`} />
+                              <div className={`w-8 h-8 rounded-md ${color} shrink-0 overflow-hidden flex items-center justify-center`}>
+                                {sp.poses.image_url ? (
+                                  <img src={sp.poses.image_url} alt={sp.poses.name} className="w-full h-full object-cover" />
+                                ) : null}
+                              </div>
                               <div className="flex-1 min-w-0">
                                 <div className="font-medium text-sm truncate">{sp.poses.name}</div>
                                 <div className="text-xs text-muted-foreground">
@@ -825,7 +830,11 @@ export default function SequenceBuilder({
                         className="flex items-center gap-2 p-2 rounded-md hover:bg-secondary transition-colors cursor-pointer group"
                         onClick={() => addPose(pose)}
                       >
-                        <div className={`w-7 h-7 rounded ${color} shrink-0`} />
+                        <div className={`w-7 h-7 rounded ${color} shrink-0 overflow-hidden flex items-center justify-center`}>
+                          {pose.image_url ? (
+                            <img src={pose.image_url} alt={pose.name} className="w-full h-full object-cover" />
+                          ) : null}
+                        </div>
                         <div className="flex-1 min-w-0">
                           <div className="text-sm font-medium truncate">{pose.name}</div>
                           <div className="text-xs text-muted-foreground truncate">{pose.sanskrit_name}</div>
